@@ -18,7 +18,7 @@ public static class BookingEndPoints
             return Results.Ok(bookings);
         });
 
-        app.MapPost("/book", async (BookingRequest request, BookingDbContext context) =>
+        app.MapPost("/bookings", async (BookingRequest request, BookingDbContext context) =>
         {
             app.Logger.LogInformation("Attempting to book seat {SeatNumber} for user {UserId}...", request.SeatNumber, request.UserId);
             var seatIsAvailable = await context.Bookings

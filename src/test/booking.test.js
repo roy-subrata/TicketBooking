@@ -38,12 +38,12 @@ export default function () {
         userId,
     });
 
-    const response = http.post(`${BASE_URL}/book`, payload, {
+    const response = http.post(`${BASE_URL}/bookings`, payload, {
         headers: {
             'Content-Type': 'application/json',
         },
         tags: {
-            endpoint: 'book',
+            endpoint: 'bookings',
             seat: String(SEAT_NUMBER),
         },
     });
