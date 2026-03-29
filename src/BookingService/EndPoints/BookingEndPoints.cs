@@ -35,6 +35,31 @@ public static class BookingEndPoints
             await context.SaveChangesAsync();
             return Results.Ok("Booking created!");
         });
+
+        app.MapPost("/book-optimistic", async (BookingRequest request, BookingDbContext context) =>
+        {
+            var booking = await context.Bookings
+                .FirstOrDefaultAsync(b => b.SeatNumber == request.SeatNumber);
+
+            if (booking == null || booking.Status == BookingStatus.Booked)
+            {
+                return Results.BadRequest($"Seat {request.SeatNumber} is not available.");
+            }
+
+            booking.Status = BookingStatus.Booked;
+            booking.UserId = request.UserId;
+            booking.UpdatedAt = DateTime.UtcNow;
+
+            try
+            {
+                await context.SaveChangesAsync();
+                return Results.Ok("Booking created!");
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                return Results.Conflict($"Seat {request.SeatNumber} was just booked by someone else. Please try again.");
+            }
+        });
     }
 
 }
