@@ -10,8 +10,17 @@ public static class BookingEndPoints
 {
     public static void MapBookingEndPoints(this WebApplication app)
     {
+
+        app.MapGet("/bookings", async (BookingDbContext context) =>
+        {
+            app.Logger.LogInformation("Fetching all bookings...");
+            var bookings = await context.Bookings.ToListAsync();
+            return Results.Ok(bookings);
+        });
+
         app.MapPost("/book", async (BookingRequest request, BookingDbContext context) =>
         {
+            app.Logger.LogInformation("Attempting to book seat {SeatNumber} for user {UserId}...", request.SeatNumber, request.UserId);
             var seatIsAvailable = await context.Bookings
                 .AnyAsync(b => b.SeatNumber == request.SeatNumber && b.Status == BookingStatus.Available);
 
