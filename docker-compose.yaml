@@ -14,5 +14,19 @@ services:
     volumes:
       - booking-db-data:/var/opt/mssql
 
+  booking-api:
+    build:
+      context: ./src
+      dockerfile: BookingService/Dockerfile
+    container_name: booking-api
+    environment:
+      - ASPNETCORE_URLS=http://+:8080
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ConnectionStrings__DefaultConnection=Server=booking-db;Database=BookingDb;User Id=sa;Password=Password@1990;Encrypt=True;TrustServerCertificate=True;
+    ports:
+      - "5001:8080"
+    depends_on:
+      - booking-db
+
 volumes:
   booking-db-data:
