@@ -3,7 +3,7 @@ import { check } from 'k6';
 import { Counter } from 'k6/metrics';
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
-const SEAT_NUMBER = Number(__ENV.SEAT_NUMBER || 6);
+const SEAT_NUMBER = Number(__ENV.SEAT_NUMBER || 7);
 const ATTEMPTS = Number(__ENV.ATTEMPTS || 50);
 
 const bookingSuccesses = new Counter('booking_successes');
@@ -38,12 +38,12 @@ export default function () {
         userId,
     });
 
-    const response = http.post(`${BASE_URL}/book-pessimistic`, payload, {
+    const response = http.post(`${BASE_URL}/book-optimistic`, payload, {
         headers: {
             'Content-Type': 'application/json',
         },
         tags: {
-            endpoint: 'bookings',
+            endpoint: 'book-optimistic',
             seat: String(SEAT_NUMBER),
         },
     });

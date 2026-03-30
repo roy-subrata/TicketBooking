@@ -13,4 +13,9 @@ public class BookingDbContext : DbContext
     }
 
     public DbSet<Booking> Bookings { get; set; }
+
+    override protected void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.ApplyConfigurationsFromAssembly(typeof(BookingDbContext).Assembly);
+    }
 }

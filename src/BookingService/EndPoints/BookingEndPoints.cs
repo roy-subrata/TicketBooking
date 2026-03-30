@@ -45,47 +45,29 @@ public static class BookingEndPoints
             return Results.Ok("Booking created!");
         });
 
-        app.MapPost("/book-pessimistic", async (BookingRequest request, BookingDbContext context) =>
+        app.MapPost("/book-optimistic", async (BookingRequest request, BookingDbContext context) =>
         {
+            var booking = await context.Bookings
+                .FirstOrDefaultAsync(b => b.SeatNumber == request.SeatNumber);
 
-            using var transaction = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.RepeatableRead);
+            if (booking == null || booking.Status == BookingStatus.Booked)
+            {
+                return Results.BadRequest($"Seat {request.SeatNumber} is not available.");
+            }
+
+            booking.Status = BookingStatus.Booked;
+            booking.UserId = request.UserId;
+            booking.UpdatedAt = DateTime.UtcNow;
+
             try
             {
-                var seatAvailable = await context.Bookings
-                .FromSqlRaw("SELECT * FROM Bookings WITH (UPDLOCK, ROWLOCK) WHERE SeatNumber = {0} AND Status = {1}", request.SeatNumber, BookingStatus.Available)
-                .AnyAsync();
-
-
-                if (!seatAvailable)
-                {
-                    transaction.Rollback();
-                    return Results.BadRequest($"Seat {request.SeatNumber} is not available.");
-                }
-
-                var booking = await context.Bookings.FromSqlRaw("SELECT * FROM Bookings WITH (UPDLOCK, ROWLOCK) WHERE SeatNumber = {0}", request.SeatNumber).FirstOrDefaultAsync();
-
-                if (booking != null && booking.Status == BookingStatus.Booked)
-                {
-                    transaction.Rollback();
-
-                    return Results.BadRequest($"Seat {request.SeatNumber} is already booked.");
-                }
-                booking.Status = BookingStatus.Booked;
-                booking.UserId = request.UserId;
-                booking.UpdatedAt = DateTime.UtcNow;
-
                 await context.SaveChangesAsync();
-                await transaction.CommitAsync();
                 return Results.Ok("Booking created!");
             }
-
-            catch (Exception ex)
+            catch (DbUpdateConcurrencyException)
             {
-                await transaction.RollbackAsync();
-                return Results.BadRequest($"An error occurred: {ex.Message}");
+                return Results.Conflict($"Seat {request.SeatNumber} was just booked by someone else. Please try again.");
             }
-
-
         });
     }
 
