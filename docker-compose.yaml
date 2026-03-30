@@ -18,15 +18,24 @@ services:
     build:
       context: ./src
       dockerfile: BookingService/Dockerfile
-    container_name: booking-api
     environment:
       - ASPNETCORE_URLS=http://+:8080
       - ASPNETCORE_ENVIRONMENT=Development
       - ConnectionStrings__DefaultConnection=Server=booking-db;Database=BookingDb;User Id=sa;Password=Password@1990;Encrypt=True;TrustServerCertificate=True;
-    ports:
-      - "5001:8080"
+    expose:
+      - "8080"
     depends_on:
       - booking-db
+
+  k6:
+    image: loadimpact/k6:latest
+    container_name: k6-tester
+    volumes:
+      - ./k6:/scripts
+    environment:
+      - API_URL=http://booking-api:8080
+    depends_on:
+      - booking-api
 
 volumes:
   booking-db-data:
