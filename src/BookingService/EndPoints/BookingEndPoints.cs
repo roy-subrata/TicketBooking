@@ -69,7 +69,51 @@ public static class BookingEndPoints
                 return Results.Conflict($"Seat {request.SeatNumber} was just booked by someone else. Please try again.");
             }
         });
+        
+        app.MapPost("/book-pessimistic", async (BookingRequest request, BookingDbContext context) =>
+        {
+
+            using var transaction = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.RepeatableRead);
+            try
+            {
+                var seatAvailable = await context.Bookings
+                .FromSqlRaw("SELECT * FROM Bookings WITH (UPDLOCK, ROWLOCK) WHERE SeatNumber = {0} AND Status = {1}", request.SeatNumber, BookingStatus.Available)
+                .AnyAsync();
+
+
+                if (!seatAvailable)
+                {
+                    transaction.Rollback();
+                    return Results.BadRequest($"Seat {request.SeatNumber} is not available.");
+                }
+
+                var booking = await context.Bookings.FromSqlRaw("SELECT * FROM Bookings WITH (UPDLOCK, ROWLOCK) WHERE SeatNumber = {0}", request.SeatNumber).FirstOrDefaultAsync();
+
+                if (booking != null && booking.Status == BookingStatus.Booked)
+                {
+                    transaction.Rollback();
+
+                    return Results.BadRequest($"Seat {request.SeatNumber} is already booked.");
+                }
+                booking.Status = BookingStatus.Booked;
+                booking.UserId = request.UserId;
+                booking.UpdatedAt = DateTime.UtcNow;
+
+                await context.SaveChangesAsync();
+                await transaction.CommitAsync();
+                return Results.Ok("Booking created!");
+            }
+
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync();
+                return Results.BadRequest($"An error occurred: {ex.Message}");
+            }
+
+
+        });
     }
+
 
 }
 
