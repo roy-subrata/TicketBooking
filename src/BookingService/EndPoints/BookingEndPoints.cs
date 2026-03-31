@@ -2,6 +2,7 @@
 
 using BookingService.Data;
 using BookingService.Data.Entities;
+using BookingService.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 
 namespace BookingService.EndPoints;
@@ -11,41 +12,42 @@ public static class BookingEndPoints
     public static void MapBookingEndPoints(this WebApplication app)
     {
 
-        app.MapGet("/bookings", async (BookingDbContext context) =>
+        app.MapGet("/bookings", async (IReadBookingDbContextFactory readDbContextFactory) =>
         {
-            app.Logger.LogInformation("Fetching all bookings...");
-            var bookings = await context.Bookings.ToListAsync();
+            await using var readScope = await readDbContextFactory.CreateAsync();
+
+            // The endpoint asks for a read context, and the selector decides
+            // which replica should serve that request.
+            app.Logger.LogInformation("Fetching all bookings from {DatabaseTarget}...", readScope.Selection.Name);
+            var bookings = await readScope.DbContext.Bookings.ToListAsync();
             return Results.Ok(bookings);
         });
 
-        app.MapPost("/bookings", async (BookingRequest request, BookingDbContext context) =>
+        app.MapPost("/bookings", async (CreateNewSeatRequest request, WriteBookingDbContext context) =>
         {
-            app.Logger.LogInformation("Attempting to book seat {SeatNumber} for user {UserId}...", request.SeatNumber, request.UserId);
-            var seatIsAvailable = await context.Bookings
-                .AnyAsync(b => b.SeatNumber == request.SeatNumber && b.Status == BookingStatus.Available);
-
-            if (!seatIsAvailable)
-            {
-                return Results.BadRequest($"Seat {request.SeatNumber} is not available.");
-            }
-
+            app.Logger.LogInformation("Attempting to create a new seat {SeatNumber}...", request.SeatNumber);
             var existingBooking = await context.Bookings
                 .FirstOrDefaultAsync(b => b.SeatNumber == request.SeatNumber);
 
-            if (existingBooking != null && existingBooking.Status == BookingStatus.Booked)
+            if (existingBooking != null)
             {
-                return Results.BadRequest($"Seat {request.SeatNumber} is already booked.");
+                return Results.BadRequest($"Seat {request.SeatNumber} already exists.");
             }
 
-            existingBooking.Status = BookingStatus.Booked;
-            existingBooking.UserId = request.UserId;
-            existingBooking.UpdatedAt = DateTime.UtcNow;
+            var newBooking = new Booking
+            {
+                SeatNumber = request.SeatNumber,
+                Status = BookingStatus.Available,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+            await context.Bookings.AddAsync(newBooking);
 
             await context.SaveChangesAsync();
             return Results.Ok("Booking created!");
         });
 
-        app.MapPost("/book-optimistic", async (BookingRequest request, BookingDbContext context) =>
+        app.MapPost("/book-optimistic", async (BookingRequest request, WriteBookingDbContext context) =>
         {
             var booking = await context.Bookings
                 .FirstOrDefaultAsync(b => b.SeatNumber == request.SeatNumber);
@@ -70,31 +72,26 @@ public static class BookingEndPoints
             }
         });
         
-        app.MapPost("/book-pessimistic", async (BookingRequest request, BookingDbContext context) =>
+        app.MapPost("/book-pessimistic", async (BookingRequest request, WriteBookingDbContext context) =>
         {
 
             using var transaction = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.RepeatableRead);
             try
             {
-                var seatAvailable = await context.Bookings
-                .FromSqlRaw("SELECT * FROM Bookings WITH (UPDLOCK, ROWLOCK) WHERE SeatNumber = {0} AND Status = {1}", request.SeatNumber, BookingStatus.Available)
-                .AnyAsync();
+                var booking = await context.Bookings
+                    .FromSqlInterpolated($"""
+                        SELECT * FROM "Bookings"
+                        WHERE "SeatNumber" = {request.SeatNumber}
+                        FOR UPDATE
+                        """)
+                    .FirstOrDefaultAsync();
 
-
-                if (!seatAvailable)
+                if (booking == null || booking.Status != BookingStatus.Available)
                 {
-                    transaction.Rollback();
+                    await transaction.RollbackAsync();
                     return Results.BadRequest($"Seat {request.SeatNumber} is not available.");
                 }
 
-                var booking = await context.Bookings.FromSqlRaw("SELECT * FROM Bookings WITH (UPDLOCK, ROWLOCK) WHERE SeatNumber = {0}", request.SeatNumber).FirstOrDefaultAsync();
-
-                if (booking != null && booking.Status == BookingStatus.Booked)
-                {
-                    transaction.Rollback();
-
-                    return Results.BadRequest($"Seat {request.SeatNumber} is already booked.");
-                }
                 booking.Status = BookingStatus.Booked;
                 booking.UserId = request.UserId;
                 booking.UpdatedAt = DateTime.UtcNow;
@@ -118,3 +115,5 @@ public static class BookingEndPoints
 }
 
 public record BookingRequest(int SeatNumber, string UserId);
+
+public record CreateNewSeatRequest(int SeatNumber);

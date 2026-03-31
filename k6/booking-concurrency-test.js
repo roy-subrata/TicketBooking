@@ -1,37 +1,70 @@
 import http from 'k6/http';
-import { check, sleep } from 'k6';
+import { check } from 'k6';
+import { Counter } from 'k6/metrics';
+
+const BASE_URL = __ENV.API_URL || 'http://localhost:5000';
+const SEAT_NUMBER = Number(__ENV.SEAT_NUMBER || 16);
+const ATTEMPTS = Number(__ENV.ATTEMPTS || 50);
+
+const bookingSuccesses = new Counter('booking_successes');
+const bookingRejected = new Counter('booking_rejected');
+const unexpectedResponses = new Counter('unexpected_responses');
 
 export const options = {
     scenarios: {
-        booking_stress: {
-            executor: 'constant-vus',
-            vus: 50,           // 50 concurrent users (increase for more stress)
-            duration: '30s',   // run for 30 seconds
+        race_for_one_seat: {
+            executor: 'shared-iterations',
+            vus: ATTEMPTS,
+            iterations: ATTEMPTS,
+            maxDuration: '30s',
         },
+    },
+    thresholds: {
+        booking_successes: ['count==1'],
+        booking_rejected: ['count==49'],
+        unexpected_responses: ['count==0'],
+        http_req_failed: ['rate==0'],
     },
 };
 
+export function setup() {
+    console.log(`Starting concurrency race test for seat ${SEAT_NUMBER} with ${ATTEMPTS} attempts`);
+    console.log('Use a fresh available seat before each run, or the result will be misleading.');
+}
+
 export default function () {
+    const userId = `user-${__VU}-${__ITER}-${Date.now()}`;
     const payload = JSON.stringify({
-        ticketId: 1,                    // ← same ticket for all → high contention
-        userId: `user-${__VU}-${Date.now()}`,
+        seatNumber: SEAT_NUMBER,
+        userId,
     });
 
-    const params = {
-        headers: { 'Content-Type': 'application/json' },
-    };
-
-    const res = http.post(`${__ENV.API_URL}/bookings`, payload, params);
-
-    check(res, {
-        'is 200 (success) or 409 (conflict)': (r) => r.status === 200 || r.status === 409,
-        'response time < 500ms': (r) => r.timings.duration < 500,
+    const response = http.post(`${BASE_URL}/book-optimistic`, payload, {
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        tags: {
+            endpoint: 'book-pessimistic',
+            seat: String(SEAT_NUMBER),
+        },
     });
 
-    // Optional: log conflicts so you can see optimistic locking in action
-    if (res.status === 409) {
-        console.log(`VU ${__VU} got conflict → another instance booked it first!`);
+    const ok = check(response, {
+        'response is 200 or 400': (r) => r.status === 200 || r.status === 400,
+    });
+
+    if (!ok) {
+        unexpectedResponses.add(1);
+        console.log(`Unexpected response: status=${response.status} body=${response.body}`);
+        return;
     }
 
-    sleep(0.1);   // small think time (remove for maximum stress)
+    if (response.status === 200) {
+        bookingSuccesses.add(1);
+        console.log(`SUCCESS: VU ${__VU} booked seat ${SEAT_NUMBER} for ${userId}`);
+        return;
+    }
+
+    bookingRejected.add(1);
+    console.log(`REJECTED: VU ${__VU} could not book seat ${SEAT_NUMBER}. body=${response.body}`);
 }

@@ -1,0 +1,171 @@
+name: Ticketing System
+
+services:
+  booking-db:
+    image: postgres:17-alpine
+    container_name: booking-bd
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: Password@1990
+      POSTGRES_DB: booking_db
+      REPLICATOR_PASSWORD: Password@1990
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./volumes/booking-bd-data:/var/lib/postgresql/data
+      - ./init-primary:/docker-entrypoint-initdb.d
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=10
+      - -c
+      - wal_keep_size=1GB
+      - -c
+      - max_replication_slots=10
+      - -c
+      - listen_addresses=*
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'pg_isready -U postgres -d booking_db && [ "$(psql -U postgres -d booking_db -tAc ''SELECT NOT pg_is_in_recovery()'')" = "t" ]'
+      start_period: 60s
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  booking-db-replica:
+    image: postgres:17-alpine
+    container_name: booking-db-replica
+    restart: unless-stopped
+    depends_on:
+      booking-db:
+        condition: service_healthy
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: Password@1990
+      POSTGRES_DB: booking_db
+      REPLICATOR_PASSWORD: Password@1990
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./volumes/booking-db-replica-data:/var/lib/postgresql/data
+    command:
+      - bash
+      - -ec
+      - |
+        if [ ! -s /var/lib/postgresql/data/PG_VERSION ]; then
+          echo '=== Performing base backup from primary for replica-1 ==='
+          rm -rf /var/lib/postgresql/data/*
+          export PGPASSWORD="$$REPLICATOR_PASSWORD"
+          pg_basebackup \
+            -h booking-db \
+            -p 5432 \
+            -U replicator \
+            -D /var/lib/postgresql/data \
+            -Fp \
+            -Xs \
+            -P \
+            -R \
+            -v \
+            -S booking_replica_slot
+          echo '=== Base backup done for replica-1 ==='
+        else
+          echo '=== Data directory already exists, starting recovery on replica-1 ==='
+        fi
+
+        exec docker-entrypoint.sh postgres -c hot_standby=on
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'pg_isready -U postgres -d booking_db && [ "$(psql -U postgres -d booking_db -tAc ''SELECT pg_is_in_recovery()'')" = "t" ]'
+      start_period: 60s
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  booking-db-replica-2:
+    image: postgres:17-alpine
+    container_name: booking-db-replica-2
+    restart: unless-stopped
+    depends_on:
+      booking-db:
+        condition: service_healthy
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: Password@1990
+      POSTGRES_DB: booking_db
+      REPLICATOR_PASSWORD: Password@1990
+    ports:
+      - "5434:5432"
+    volumes:
+      - ./volumes/booking-db-replica-2-data:/var/lib/postgresql/data
+    command:
+      - bash
+      - -ec
+      - |
+        if [ ! -s /var/lib/postgresql/data/PG_VERSION ]; then
+          echo '=== Performing base backup from primary for replica-2 ==='
+          rm -rf /var/lib/postgresql/data/*
+          export PGPASSWORD="$$REPLICATOR_PASSWORD"
+          pg_basebackup \
+            -h booking-db \
+            -p 5432 \
+            -U replicator \
+            -D /var/lib/postgresql/data \
+            -Fp \
+            -Xs \
+            -P \
+            -R \
+            -v \
+            -S booking_replica_slot_2
+          echo '=== Base backup done for replica-2 ==='
+        else
+          echo '=== Data directory already exists, starting recovery on replica-2 ==='
+        fi
+
+        exec docker-entrypoint.sh postgres -c hot_standby=on
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'pg_isready -U postgres -d booking_db && [ "$(psql -U postgres -d booking_db -tAc ''SELECT pg_is_in_recovery()'')" = "t" ]'
+      start_period: 60s
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  booking-api:
+    build:
+      context: ../src
+      dockerfile: BookingService/Dockerfile
+    environment:
+      - ASPNETCORE_URLS=http://+:8080
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ConnectionStrings__Write=Host=booking-db;Port=5432;Database=booking_db;Username=postgres;Password=Password@1990
+      - ReadReplicas__Nodes__0__Name=replica-1
+      - ReadReplicas__Nodes__0__ConnectionString=Host=booking-db-replica;Port=5432;Database=booking_db;Username=postgres;Password=Password@1990
+      - ReadReplicas__Nodes__1__Name=replica-2
+      - ReadReplicas__Nodes__1__ConnectionString=Host=booking-db-replica-2;Port=5432;Database=booking_db;Username=postgres;Password=Password@1990
+    expose:
+      - "8080"
+    ports:
+      - "5001:8080"
+    depends_on:
+      booking-db:
+        condition: service_healthy
+      booking-db-replica:
+        condition: service_healthy
+      booking-db-replica-2:
+        condition: service_healthy
+
+  k6:
+    image: grafana/k6:latest
+    container_name: k6-tester
+    volumes:
+      - ./k6:/scripts
+    environment:
+      - API_URL=http://booking-api:8080
+    depends_on:
+      - booking-api

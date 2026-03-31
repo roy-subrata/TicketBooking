@@ -10,7 +10,6 @@ public class BookingEntityConfiguration : IEntityTypeConfiguration<Booking>
 {
     public void Configure(EntityTypeBuilder<Booking> builder)
     {
-
-        builder.Property(b => b.RowVersion).IsRowVersion();
+        builder.Property(b => b.UpdatedAt).IsConcurrencyToken();
     }
 }

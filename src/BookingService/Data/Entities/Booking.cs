@@ -1,7 +1,4 @@
 
-
-using System.ComponentModel.DataAnnotations;
-
 namespace BookingService.Data.Entities;
 
 public class Booking
@@ -13,9 +10,6 @@ public class Booking
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
     public DateTime BookedAt { get; set; }
-    [Timestamp]
-    public byte[] RowVersion { get; set; } = Array.Empty<byte>();
-
 }
 
 public enum BookingStatus
